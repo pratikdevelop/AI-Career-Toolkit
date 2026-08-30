@@ -275,6 +275,39 @@ def show_paywall_message(stripe_link):
     st.link_button("💳 Unlock unlimited optimizations", stripe_link, use_container_width=True)
 
 
+def log_event(event_type, details=""):
+    """Fire-and-forget analytics logging to a Google Sheet via Apps Script.
+
+    Never raises — if the webhook isn't configured or the request fails,
+    this silently does nothing so it can never break the app's main flow.
+    """
+    webhook_url = st.secrets.get("ANALYTICS_WEBHOOK_URL", None) if hasattr(st, "secrets") else None
+    if not webhook_url:
+        return
+    try:
+        requests.post(
+            webhook_url,
+            json={"event_type": event_type, "details": details},
+            timeout=3
+        )
+    except Exception:
+        pass
+
+
+@st.cache_data(show_spinner=False, ttl=30)
+def get_analytics_summary():
+    """Read aggregate stats back from the analytics webhook, if configured."""
+    webhook_url = st.secrets.get("ANALYTICS_WEBHOOK_URL", None) if hasattr(st, "secrets") else None
+    if not webhook_url:
+        return None
+    try:
+        resp = requests.get(webhook_url, timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return None
+
+
 EXAMPLE_RESUME = """Jordan Lee
 Marketing Coordinator with 3 years of experience in social media management and email campaigns.
 
@@ -334,6 +367,10 @@ st.sidebar.caption("CareerReshape · Built with ❤️. No data is saved after y
 # =========================================================
 st.title("📄 CareerReshape")
 st.markdown("**Reshape your resume and LinkedIn profile for the job you actually want** — powered by AI.")
+
+if "page_view_logged" not in st.session_state:
+    log_event("page_view")
+    st.session_state.page_view_logged = True
 
 app_mode = st.radio(
     "Choose a tool",
@@ -449,6 +486,7 @@ if app_mode == "📄 Resume Optimizer":
                 try:
                     prompt = build_resume_prompt(resume_text, job_desc)
                     result = run_ai_json_call(api_key, prompt)
+                    log_event("resume_optimization_completed")
 
                     score = result.get("match_score", 0)
                     st.subheader("📊 Match Score")
@@ -649,6 +687,7 @@ else:
                 try:
                     prompt = build_linkedin_prompt(source_text, target_role)
                     result = run_ai_json_call(api_key, prompt)
+                    log_event("linkedin_optimization_completed")
 
                     li_tab1, li_tab2, li_tab3, li_tab4 = st.tabs(
                         ["✨ Headline", "📝 About Section", "💼 Experience Bullets", "🏷️ Skills & Notes"]
@@ -683,3 +722,33 @@ else:
 
     st.markdown("---")
     st.caption("💡 Tip: LinkedIn headlines perform best under 220 characters and front-load your role + key skill.")
+
+# =========================================================
+# HIDDEN ADMIN VIEW — only visible with ?admin=<ADMIN_KEY> in the URL
+# =========================================================
+query_params = st.query_params
+admin_key = st.secrets.get("ADMIN_KEY", None) if hasattr(st, "secrets") else None
+
+if admin_key and query_params.get("admin") == admin_key:
+    st.markdown("---")
+    st.header("📊 Admin: Usage Analytics")
+
+    stats = get_analytics_summary()
+    if stats is None:
+        st.info("No analytics data yet, or ANALYTICS_WEBHOOK_URL isn't configured.")
+    else:
+        col_a, col_b = st.columns(2)
+        col_a.metric("Total events (all time)", stats.get("total_events", 0))
+        col_b.metric("Events today", stats.get("events_today", 0))
+
+        st.markdown("**Breakdown by event type**")
+        counts = stats.get("counts_by_type", {})
+        if counts:
+            for event_type, count in sorted(counts.items(), key=lambda x: -x[1]):
+                st.markdown(f"- `{event_type}`: {count}")
+        else:
+            st.caption("No events logged yet.")
+
+    if st.button("🔄 Refresh stats"):
+        get_analytics_summary.clear()
+        st.rerun()
