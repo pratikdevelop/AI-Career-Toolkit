@@ -10,7 +10,7 @@ import docx
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
-    page_title="AI Career Toolkit",
+    page_title="CareerReshape",
     page_icon="📄",
     layout="wide"
 )
@@ -247,6 +247,34 @@ def run_ai_json_call(api_key, prompt):
     raise RuntimeError(f"None of the available Gemini models worked. Last error: {last_error}")
 
 
+FREE_USES_PER_SESSION = 3
+
+def check_and_consume_free_use():
+    """Soft usage-cap paywall: tracks free uses in session state.
+
+    Returns True if this use is allowed (consumes one credit), False if the
+    free limit is reached. If no Stripe link is configured, the cap is not
+    enforced at all — everything stays free until you set STRIPE_PAYMENT_LINK.
+    """
+    stripe_link = st.secrets.get("STRIPE_PAYMENT_LINK", None) if hasattr(st, "secrets") else None
+    if not stripe_link:
+        return True, None
+
+    if "uses_this_session" not in st.session_state:
+        st.session_state.uses_this_session = 0
+
+    if st.session_state.uses_this_session >= FREE_USES_PER_SESSION:
+        return False, stripe_link
+
+    st.session_state.uses_this_session += 1
+    return True, stripe_link
+
+
+def show_paywall_message(stripe_link):
+    st.warning(f"You've used your {FREE_USES_PER_SESSION} free optimizations for this session.")
+    st.link_button("💳 Unlock unlimited optimizations", stripe_link, use_container_width=True)
+
+
 EXAMPLE_RESUME = """Jordan Lee
 Marketing Coordinator with 3 years of experience in social media management and email campaigns.
 
@@ -299,13 +327,13 @@ else:
     api_key = st.sidebar.text_input("Gemini API Key", type="password")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Built with ❤️ — Free & Open. No data is saved after your session ends.")
+st.sidebar.caption("CareerReshape · Built with ❤️. No data is saved after your session ends.")
 
 # =========================================================
 # HEADER + MODE SELECTOR
 # =========================================================
-st.title("📄 AI Career Toolkit")
-st.markdown("Optimize your resume for a specific job, or polish your LinkedIn profile — powered by AI.")
+st.title("📄 CareerReshape")
+st.markdown("**Reshape your resume and LinkedIn profile for the job you actually want** — powered by AI.")
 
 app_mode = st.radio(
     "Choose a tool",
@@ -413,6 +441,10 @@ if app_mode == "📄 Resume Optimizer":
         elif not job_desc.strip():
             st.error("⚠️ Please provide a job description (via URL or paste).")
         else:
+            allowed, stripe_link = check_and_consume_free_use()
+            if not allowed:
+                show_paywall_message(stripe_link)
+                st.stop()
             with st.spinner("Analyzing your resume against the job description..."):
                 try:
                     prompt = build_resume_prompt(resume_text, job_desc)
@@ -609,6 +641,10 @@ else:
         elif not source_text.strip():
             st.error("⚠️ Please paste your profile text or upload a resume.")
         else:
+            allowed, stripe_link = check_and_consume_free_use()
+            if not allowed:
+                show_paywall_message(stripe_link)
+                st.stop()
             with st.spinner("Optimizing your LinkedIn profile..."):
                 try:
                     prompt = build_linkedin_prompt(source_text, target_role)
