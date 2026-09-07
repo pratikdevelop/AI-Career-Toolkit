@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 import PyPDF2
 import docx
+from urllib.parse import quote
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
@@ -152,7 +153,9 @@ Given the RESUME and JOB DESCRIPTION below, do the following and respond ONLY in
   "strengths": [<list of 3-5 things the resume already does well for this job>],
   "improvement_suggestions": [<list of 3-6 specific, actionable suggestions>],
   "optimized_resume": "<a rewritten, improved version of the resume text, tailored to this job, keeping it truthful to the original content — do not invent experience>",
-  "cover_letter": "<a concise, tailored 3-paragraph cover letter based on the resume and job description>"
+  "cover_letter": "<a concise, tailored 3-paragraph cover letter based on the resume and job description>",
+  "outreach_email_subject": "<a short, specific email subject line for applying to this role, e.g. 'Application for [Role] — [Candidate Name]'>",
+  "outreach_email_body": "<a brief, direct application email (shorter than the cover letter, 3-4 short paragraphs), suitable for sending directly to a hiring contact, mentioning the attached resume>"
 }}
 
 RESUME:
@@ -184,6 +187,24 @@ optimized LinkedIn profile. Respond ONLY in valid JSON (no markdown fences, no p
 SOURCE CONTENT:
 {source_text}
 """
+
+
+EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+def extract_email_from_text(text):
+    """Find the first email address mentioned in a job posting's text, if any.
+
+    Only detects emails the company itself chose to publish on the posting —
+    never guesses, infers, or looks up an individual's personal email.
+    """
+    if not text:
+        return None
+    match = EMAIL_REGEX.search(text)
+    return match.group(0) if match else None
+
+
+def build_mailto_link(recipient, subject, body):
+    return f"mailto:{quote(recipient)}?subject={quote(subject)}&body={quote(body)}"
 
 
 def extract_json(text):
@@ -493,8 +514,8 @@ if app_mode == "📄 Resume Optimizer":
                     st.progress(score / 100)
                     st.metric("ATS Match Score", f"{score}/100")
 
-                    tab1, tab2, tab3, tab4 = st.tabs(
-                        ["🔑 Keywords & Strengths", "💡 Suggestions", "📝 Optimized Resume", "✉️ Cover Letter"]
+                    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                        ["🔑 Keywords & Strengths", "💡 Suggestions", "📝 Optimized Resume", "✉️ Cover Letter", "📧 Outreach Email"]
                     )
 
                     with tab1:
@@ -546,6 +567,44 @@ if app_mode == "📄 Resume Optimizer":
                             cover,
                             file_name="cover_letter.txt"
                         )
+
+                    with tab5:
+                        st.markdown("**Application Outreach Email**")
+                        detected_email = extract_email_from_text(job_desc)
+                        if detected_email:
+                            st.success(f"✅ Found a contact email on this posting: {detected_email}")
+                        else:
+                            st.info(
+                                "No email address was found on this job posting. "
+                                "If you know the correct application contact, enter it below — "
+                                "this app never guesses or looks up individual email addresses."
+                            )
+
+                        recipient = st.text_input(
+                            "Recipient email",
+                            value=detected_email or "",
+                            placeholder="hr@company.com"
+                        )
+                        email_subject = st.text_input(
+                            "Subject",
+                            value=result.get("outreach_email_subject", "")
+                        )
+                        email_body = st.text_area(
+                            "Body",
+                            value=result.get("outreach_email_body", ""),
+                            height=250
+                        )
+
+                        st.caption(
+                            "📎 Remember to attach your downloaded resume before sending — "
+                            "this only opens a draft in your own email client, it never sends anything for you."
+                        )
+
+                        if recipient.strip():
+                            mailto_url = build_mailto_link(recipient.strip(), email_subject, email_body)
+                            st.link_button("📧 Open draft in your email app", mailto_url, use_container_width=True)
+                        else:
+                            st.caption("Enter a recipient email above to enable the draft button.")
 
                 except json.JSONDecodeError:
                     st.error("The AI response couldn't be parsed. Please try again.")
